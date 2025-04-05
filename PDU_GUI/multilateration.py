@@ -1,19 +1,19 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.animation as animation
+import matplotlib.patches as patches
 from scipy.optimize import least_squares
-from rssi import RSSI
-from rssi_values import WifiTowerScanner, RSSI_Calculator
+from rssi_values import WifiTowerScanner
 
 class Multilateration:
     def __init__(self, simulate_tower_down=True, resolution=1.0):
         """
         Initializes the multilateration class.
-        
+
         Args:
             simulate_tower_down (bool): If True, randomly remove one tower from multilateration.
             resolution (float): Grid resolution (in feet) for checking common intersection.
         """
-        # Define tower positions in a 300 ft x 300 ft square
         tower_positions = {
             "Tower 1": np.array([0, 0]),
             "Tower 2": np.array([300, 0]),
@@ -21,153 +21,292 @@ class Multilateration:
             "Tower 4": np.array([0, 300])
         }
         self.tower_positions = tower_positions
-        self.simulate_tower_down = simulate_tower_down
         self.resolution = resolution
-        self.simulator = None
+        self.scanner = WifiTowerScanner(-40, 2)
+        self.simulator = self.scanner.calculator
         self.towers_for_multilateration = None
         self.estimated_position = None
-        self.down_tower = None  # To store the tower that is down (if any)
+        self.down_tower = None
+        self.ani = None
+        self.rings = []
+        self.static_circles = []  # To store static distance circles
+        self.fig = None
+        self.ax = None
+        self.est_pos_artist = None
+        self.coord_text = None
 
-        self.scanner = WifiTowerScanner(-36, 2)
-        self.simulator = self.scanner.calculator
-
-    # def generate_random_readings(self):
-    #     """
-    #     Generates random readings for all towers.
-    #     """
-
-    #     self.simulator.generate_random_readings(self.variance)
+        # --- Animation Parameters ---  
+        self.MAX_RADIUS_PULSE = 40
+        self.ANIMATION_SPEED = 2
+        self.RSSI_MIN = -90
+        self.RSSI_MAX = -20
+        self.ANIMATION_INTERVAL = 50
 
     def select_towers_for_multilateration(self):
         """
-        Select towers to use for multilateration. Optionally simulates one tower being down.
+        Select towers that have sufficient readings.
         """
+        self.towers_for_multilateration = []
+        self.down_tower = None
+        all_towers = list(self.tower_positions.keys())
 
-        self.towers_for_multilateration = self.simulator.towers.copy()
-        for tower in self.towers_for_multilateration[::-1]:
-            if len(self.simulator.get_readings(tower)) < self.simulator.max_readings:
-                self.towers_for_multilateration.remove(tower)
+        active_towers = []
+        down_towers = []
+
+        for tower in all_towers:
+            if len(self.simulator.get_readings(tower)) > 0:
+                active_towers.append(tower)
+            else:
+                down_towers.append(tower)
+
+        self.towers_for_multilateration = active_towers
+        if down_towers:
+            self.down_tower = down_towers
+
+        print(f"Active towers for multilateration: {self.towers_for_multilateration}")
+        if self.down_tower:
+            print(f"Down towers: {self.down_tower}")
 
     def multilaterate(self):
         """
-        multilaterates the estimated device position using least squares optimization.
-        Uses the towers selected (which might be fewer than four if one is down).
+        Calculates the estimated device position using least squares optimization.
+        Uses the towers selected.
         """
-
-        # Select the towers to use for multilateration.
         self.select_towers_for_multilateration()
 
-        # Get and output the average distance for each tower.
+        if len(self.towers_for_multilateration) < 3:
+            print("Not enough active towers (<3) for multilateration.")
+            self.estimated_position = None
+            return self.estimated_position
+
         readings = {}
+        distances = {}
+        print("\n--- Readings & Distances ---")
         for tower in self.towers_for_multilateration:
             rssi_reading = self.simulator.get_average_reading(tower)
             readings[tower] = rssi_reading
-            print(f"{tower}: RSSI = {rssi_reading} dBm")
+            print(f"{tower}: RSSI = {rssi_reading:.2f} dBm")
 
-        # Get and output the average distance for each tower.
-        distances = {}
-        for tower in self.towers_for_multilateration:
             avg_distance = self.simulator.get_average_distance(tower)
-            distances[tower] = avg_distance
-            print(f"{tower}: Average Distance = {avg_distance:.2f} ft")
-        
-        # Define the residuals function for least squares optimization.
+            if avg_distance > 1000:
+                print(f"{tower}: Ignoring unreasonable distance {avg_distance:.2f} ft")
+            else:
+                distances[tower] = avg_distance
+                print(f"{tower}: Average Distance = {avg_distance:.2f} ft")
+        print("---------------------------\n")
+
+        towers_with_valid_distance = list(distances.keys())
+        if len(towers_with_valid_distance) < 3:
+            print("Not enough towers with valid distances (<3) for multilateration.")
+            self.estimated_position = None
+            return self.estimated_position
+
         def residuals(point):
             return [
                 np.linalg.norm(point - self.tower_positions[tower]) - distances[tower]
-                for tower in self.towers_for_multilateration
+                for tower in towers_with_valid_distance
             ]
-        
-        # Guess the center then adjust with least squares.
-        initial_guess = np.array([0, 0])
-        result = least_squares(residuals, initial_guess)
-        self.estimated_position = result.x
-        print(f"Estimated position: {self.estimated_position}")
+
+        initial_guess = np.mean([self.tower_positions[tower] for tower in towers_with_valid_distance], axis=0)
+        bounds = ([-50, -50], [350, 350])
+
+        try:
+            result = least_squares(residuals, initial_guess, bounds=bounds)
+            if result.success:
+                self.estimated_position = result.x
+                print(f"Estimated position (X, Y): ({self.estimated_position[0]:.2f}, {self.estimated_position[1]:.2f}) ft")
+            else:
+                print(f"Least squares optimization failed: {result.message}")
+                self.estimated_position = None
+        except Exception as e:
+            print(f"Error during least squares optimization: {e}")
+            self.estimated_position = None
+
         return self.estimated_position
 
-    def plot(self):
-        """
-        Plots each tower as a colored dot (each tower a different color) with a circle 
-        (radius = average distance) and the estimated device position as a red dot.
-        The down tower (if any) does not have a circle drawn around it.
-        Each tower is labeled with its number (e.g. 1 for Tower 1).
-        """
-        fig, ax = plt.subplots()
-        ax.grid(True)
-        tower_colors = ['green', 'darkcyan', 'navy', 'purple']
+    def _setup_plot_elements(self):
+        """Sets up the static parts of the plot and initial ring patches."""
+        if self.fig:
+            plt.close(self.fig)
 
-        number_adjustments = [[20, 20],
-                              [-10, 20],
-                              [-8, -8],
-                              [20, -10]]
+        self.fig, self.ax = plt.subplots()
+        self.ax.grid(True)
+        tower_marker_colors = {
+            "Tower 1": 'green', "Tower 2": 'darkcyan',
+            "Tower 3": 'navy', "Tower 4": 'purple'
+        }
+        number_adjustments = {
+            "Tower 1": [20, 20], "Tower 2": [-10, 20],
+            "Tower 3": [-8, -8], "Tower 4": [20, -10]
+        }
 
-        # Plot each tower.
-        for i, tower in enumerate(self.simulator.towers):
-            tower_number = int(tower.split()[-1]) - 1
-            pos = self.tower_positions[tower]
+        # Colormap from red to green
+        cmap = plt.cm.get_cmap('RdYlGn') # '_r' reverses the default
+        norm = plt.Normalize(vmin=self.RSSI_MIN, vmax=self.RSSI_MAX)
 
-            # Check if a tower is down
-            tower_down = len(self.simulator.get_readings(tower)) == 0
+        self.rings = []
+        self.static_circles = []
+        active_tower_data = []
 
-            # If tower is actually up
-            if not tower_down:
-                rssi_reading = self.simulator.get_average_reading(tower)
-                avg_distance = self.simulator.get_average_distance(tower)
-                color = tower_colors[i % len(tower_colors)]
+        for tower_name in self.tower_positions:
+            pos = self.tower_positions[tower_name]
+            is_down = tower_name not in self.towers_for_multilateration
+
+            if not is_down:
+                rssi = self.simulator.get_average_reading(tower_name)
+                rssi_clamped = np.clip(rssi, self.RSSI_MIN, self.RSSI_MAX)
+                ring_color = cmap(norm(rssi_clamped))
+                marker_color = tower_marker_colors.get(tower_name, 'black')
+                active_tower_data.append({'name': tower_name, 'pos': pos, 'color': ring_color})
+
+                # Add static distance circle
+                avg_distance = self.simulator.get_average_distance(tower_name)
+                if avg_distance > 0 and avg_distance < 1000: # Basic sanity check
+                    static_circle = patches.Circle(pos, radius=avg_distance, edgecolor='gray',
+                                                    facecolor='none', linestyle='--', alpha=0.6)
+                    self.ax.add_patch(static_circle)
+                    self.static_circles.append(static_circle)
+
             else:
-                color = "grey"
+                marker_color = "grey"
 
-            # Plot the tower as a dot.
-            ax.plot(pos[0], pos[1], 'o', markersize=8, color=color)
-            # Label the tower with just its number.
-            tower_label = tower.split()[-1]  # e.g., "Tower 1" -> "1"
-            ax.text(pos[0] + number_adjustments[tower_number][0], pos[1] + number_adjustments[tower_number][1], tower_label, fontsize=12, color=color)
+            self.ax.plot(pos[0], pos[1], 's', markersize=8, color=marker_color)
+            tower_label = tower_name.split()[-1]
+            adj = number_adjustments.get(tower_name, [10, 10])
+            self.ax.text(pos[0] + adj[0], pos[1] + adj[1], tower_label,
+                         fontsize=12, color=marker_color)
 
+        # Create initial pulsing ring patches
+        for data in active_tower_data:
+            ring = patches.Circle(data['pos'], radius=0.1, edgecolor=data['color'],
+                                 facecolor='none', linewidth=1.5)
+            self.ax.add_patch(ring)
+            self.rings.append(ring)
 
-            # Only draw the circle if the tower is up
-            if not tower_down:
-                circle = plt.Circle((pos[0], pos[1]), rssi_reading, linestyle="--", color=color, fill=False)
-                ax.add_artist(circle)
-                circle = plt.Circle((pos[0], pos[1]), avg_distance, color=color, fill=False, label="Distance (ft)")
-                ax.add_artist(circle)
-        
-        # Plot the estimated position as a red dot.
-        actual_coordinates = ""
+        actual_coordinates_text = ""
+        self.est_pos_artist = None
         if self.estimated_position is not None:
-            ax.plot(self.estimated_position[0], self.estimated_position[1], 'ro', markersize=10)
-            actual_coordinates = f"Current PDU Coordinates:\nX: {int(self.estimated_position[0])} ft, Y: {int(self.estimated_position[1])} ft"
+            line = self.ax.plot(self.estimated_position[0], self.estimated_position[1],
+                                'ro', markersize=10, label='Estimated Position')
+            self.est_pos_artist = line[0]
+            actual_coordinates_text = f"Est. PDU Coordinates:\nX: {int(self.estimated_position[0])} ft, Y: {int(self.estimated_position[1])} ft"
+        else:
+            actual_coordinates_text = "Est. PDU Coordinates:\nNot Available"
 
-        ax.set_title(f"Multilateration based on RSSI\n")
-        secax_x = ax.secondary_xaxis('top')
-        secax_y = ax.secondary_yaxis('right')
+        self.ax.set_title(f"Multilateration based on RSSI (Animated)\n")
+        secax_x = self.ax.secondary_xaxis('top')
+        secax_y = self.ax.secondary_yaxis('right')
         secax_x.set_xlabel(f"X (ft)")
         secax_y.set_ylabel("Y (ft)")
-        ax.set_xlabel(f"\n{actual_coordinates}")
-        ax.set_xlim(-5, 305)
-        ax.set_ylim(-5, 305)
-        ax.invert_xaxis()
-        ax.invert_yaxis()
-        ax.tick_params(axis="x", bottom=False, labelbottom=False)
-        ax.tick_params(axis="y",left=False, labelleft=False)
-        secax_x.set_xlim(-5, 305)
-        secax_y.set_ylim(-5, 305)
+        self.coord_text = self.ax.text(0.5, -0.1, actual_coordinates_text,
+                                     transform=self.ax.transAxes,
+                                     ha='center', va='top', fontsize=9)
+
+        self.ax.set_xlim(-5, 305)
+        self.ax.set_ylim(-5, 305)
+        self.ax.invert_xaxis()
+        self.ax.invert_yaxis()
+
+        self.ax.tick_params(axis="x", bottom=False, labelbottom=False)
+        self.ax.tick_params(axis="y", left=False, labelleft=False)
+        secax_x.set_xlim(self.ax.get_xlim())
+        secax_y.set_ylim(self.ax.get_ylim())
         secax_x.invert_xaxis()
         secax_y.invert_yaxis()
-        ax.legend(bbox_to_anchor=(1.2, 1.3), loc='upper left', fontsize=7, fancybox=True, shadow=True)
-        ax.set_aspect('equal', 'box')
 
+        self.ax.set_aspect('equal', 'box')
+        self.fig.tight_layout(rect=[0, 0.05, 1, 0.95])
 
-        # Save and show the plot.
-        plt.tight_layout()
-        plt.savefig("multilateration.png")
-        # Uncomment to show the plot.
-        #plt.show()
+    def _init_animation(self):
+        """Initializes the animation."""
+        for ring in self.rings:
+            ring.set_radius(0.1)
+            ring.set_alpha(1.0)
+        if self.est_pos_artist:
+            self.est_pos_artist.set_data([], [])
+            return self.rings + [self.est_pos_artist]
+        else:
+            return self.rings
+
+    def _update_animation(self, frame):
+        """Updates the animation for each frame."""
+        pulse_progress = (frame * self.ANIMATION_SPEED) % self.MAX_RADIUS_PULSE
+        current_radius = pulse_progress
+        fade_start_radius = self.MAX_RADIUS_PULSE / 4
+        if current_radius > fade_start_radius:
+            alpha_progress = (current_radius - fade_start_radius) / (self.MAX_RADIUS_PULSE - fade_start_radius)
+            current_alpha = max(0, 1.0 - alpha_progress)
+        else:
+            current_alpha = 1.0
+
+        for ring in self.rings:
+            ring.set_radius(current_radius)
+            ring.set_alpha(current_alpha)
+
+        artists_to_return = list(self.rings)
+        if self.est_pos_artist:
+            if self.estimated_position is not None:
+                self.est_pos_artist.set_data([self.estimated_position[0]], [self.estimated_position[1]])
+                self.est_pos_artist.set_visible(True)
+                coord_txt = f"Est. PDU Coordinates:\nX: {int(self.estimated_position[0])} ft, Y: {int(self.estimated_position[1])} ft"
+                self.coord_text.set_text(coord_txt)
+            else:
+                self.est_pos_artist.set_visible(False)
+                self.coord_text.set_text("Est. PDU Coordinates:\nNot Available")
+
+            artists_to_return.extend([self.est_pos_artist, self.coord_text])
+
+        return artists_to_return
+
+    def run_animation(self, frames=60):
+        """Sets up the plot and starts the animation.
+
+        Args:
+            frames (int): Number of frames to run the animation for.
+                          Set to None for continuous running.
+        """
+        if self.estimated_position is None:
+            print("Warning: No estimated position calculated yet. Running multilaterate()...")
+            self.multilaterate()
+
+        self._setup_plot_elements()
+
+        self.ani = animation.FuncAnimation(
+            self.fig,
+            self._update_animation,
+            init_func=self._init_animation,
+            frames=frames,
+            interval=self.ANIMATION_INTERVAL,
+            blit=True,
+            repeat=True
+        )
+
+    def save_animation(self, filename="multilateration_animation.gif", fps=60):
+        """Saves the animation to a file (e.g., GIF or MP4)."""
+        if self.ani:
+            if fps is None:
+                fps = 1000 / self.ANIMATION_INTERVAL
+            if not self.fig:
+                self._setup_plot_elements()
+
+            print(f"Saving animation to {filename} (FPS: {fps})...")
+            try:
+                writer = 'pillow' if filename.lower().endswith('.gif') else 'ffmpeg'
+                self.ani.save(filename, writer=writer, fps=fps)
+                print("Save complete.")
+            except Exception as e:
+                print(f"Error saving animation: {e}")
+                print(f"Ensure you have a suitable writer installed (e.g., 'pip install pillow' for GIFs, or ffmpeg for MP4)")
+                print(f"Attempted writer: {writer}")
+        else:
+            print("Animation not generated yet. Run run_animation() first.")
 
 # Example usage:
 def main():
-    multilaterator = Multilateration(simulate_tower_down=True, resolution=1.0, variance=2.0)
+    multilaterator = Multilateration(simulate_tower_down=False)
     multilaterator.multilaterate()
-    multilaterator.plot()
+    multilaterator.run_animation(frames=200)
+    # multilaterator.save_animation("my_animation.gif")
 
 if __name__ == "__main__":
     main()

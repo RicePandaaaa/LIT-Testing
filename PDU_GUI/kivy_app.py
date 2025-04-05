@@ -11,7 +11,7 @@ class multilaterationWidget(BoxLayout):
         self.orientation = 'vertical'
              
         # Initialize image widget without an image if file doesn't exist
-        initial_source = "multilateration.png" if os.path.exists("multilateration.png") else ""
+        initial_source = "multilateration_animation.gif" if os.path.exists("multilateration_animation.gif") else ""
         self.img = Image(source=initial_source, allow_stretch=True, keep_ratio=True)
         self.add_widget(self.img)
 
@@ -19,8 +19,8 @@ class multilaterationWidget(BoxLayout):
 
     def update_image(self):
         # Check if the file exists, and update the image widget accordingly
-        if os.path.exists("multilateration.png"):
-            self.img.source = "multilateration.png"
+        if os.path.exists("multilateration_animation.gif"):
+            self.img.source = "multilateration_animation.gif"
             self.img.reload()
         else:
             self.img.source = ""

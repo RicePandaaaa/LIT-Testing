@@ -12,7 +12,9 @@ def main():
     multilaterator.multilaterate()
     
     # Plot the towers (with circles) and the estimated position.
-    multilaterator.plot()
+    multilaterator.run_animation()
+
+    multilaterator.save_animation(filename="multilateration_animation.gif", fps=60)
 
 if __name__ == "__main__":
     main()

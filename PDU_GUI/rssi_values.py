@@ -1,5 +1,5 @@
 import rssi
-import subprocess
+import random
 
 class WifiTowerScanner:
     def __init__(self, RSSI_naught: float, n: float):
@@ -15,39 +15,10 @@ class WifiTowerScanner:
 
     def get_tower_signal(self):
         # Run the command to get the scan results
-        command = "sudo -s wpa_cli scan && sudo -s wpa_cli scan_results | grep 'LIT Wi-Fi'"
-        result = subprocess.run(command, shell=True, capture_output=True, text=True)
+        readings = [random.randint(-80, -20) for _ in range(4)]
 
-        # Check if the result is successful
-        if result.returncode == 0:
-            # Split the output into lines
-            lines = result.stdout.splitlines()
-
-            # Initialize a list to store the towers and their signal levels
-            tower_signal = []
-
-            # Parse each line
-            for line in lines[2:]:
-                # Split the line by whitespace to extract each component
-                parts = line.split()
-
-                # Extract the MAC address and signal level
-                mac_address = parts[0]
-                print(mac_address)
-                signal_level = parts[2]
-
-                # If the MAC address matches one in our tower map, add it to the result
-                if mac_address.lower() in self.tower_map:
-                    tower_name = self.tower_map[mac_address.lower()]
-                    # tower_signal.append([tower_name, float(signal_level)])
-                    self.calculator.add_reading_and_distance(tower_name, float(signal_level))
-                    print(f"{tower_name}: {self.calculator.get_distances(tower_name)}")
-
-            # Return the tower names and their signal levels
-            return tower_signal
-        else:
-            print("Error executing command")
-            return []
+        for i in range(1, 5):
+            self.calculator.add_reading_and_distance(f"Tower {i}", readings[i-1])
 
 
 class RSSI_Calculator:
