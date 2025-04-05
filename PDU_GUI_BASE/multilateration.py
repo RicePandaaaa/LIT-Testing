@@ -126,9 +126,7 @@ class Multilateration:
 
             # Only draw the circle if the tower is up
             if not tower_down:
-                circle = plt.Circle((pos[0], pos[1]), rssi_reading, linestyle="--", color=color, fill=False)
-                ax.add_artist(circle)
-                circle = plt.Circle((pos[0], pos[1]), avg_distance, color=color, fill=False, label="Distance (ft)")
+                circle = plt.Circle((pos[0], pos[1]), avg_distance, color=color, fill=False)
                 ax.add_artist(circle)
         
         # Plot the estimated position as a red dot.
@@ -164,7 +162,6 @@ class Multilateration:
         secax_y.set_ylim(-5, 305)
         secax_x.invert_xaxis()
         secax_y.invert_yaxis()
-        ax.legend(bbox_to_anchor=(1.2, 1.3), loc='upper left', fontsize=7, fancybox=True, shadow=True)
         ax.set_aspect('equal', 'box')
 
         # Save and show the plot.
