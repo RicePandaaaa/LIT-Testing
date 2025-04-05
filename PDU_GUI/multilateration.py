@@ -137,16 +137,27 @@ class Multilateration:
             ax.plot(self.estimated_position[0], self.estimated_position[1], 'ro', markersize=10)
             actual_coordinates = f"Current PDU Coordinates:\nX: {int(self.estimated_position[0])} ft, Y: {int(self.estimated_position[1])} ft"
 
+        # Set the title of the plot.
         ax.set_title(f"Multilateration based on RSSI\n")
+
+        # Set the secondary x and y axes.
         secax_x = ax.secondary_xaxis('top')
         secax_y = ax.secondary_yaxis('right')
         secax_x.set_xlabel(f"X (ft)")
         secax_y.set_ylabel("Y (ft)")
+
+        # Show the actual coordinates of the PDU.
         ax.set_xlabel(f"\n{actual_coordinates}")
+
+        # Set the limits of the plot.
         ax.set_xlim(-5, 305)
         ax.set_ylim(-5, 305)
+
+        # Invert the x and y axes.
         ax.invert_xaxis()
         ax.invert_yaxis()
+
+        # Hide the tick labels on the x and y axes.
         ax.tick_params(axis="x", bottom=False, labelbottom=False)
         ax.tick_params(axis="y",left=False, labelleft=False)
         secax_x.set_xlim(-5, 305)
@@ -156,10 +167,10 @@ class Multilateration:
         ax.legend(bbox_to_anchor=(1.2, 1.3), loc='upper left', fontsize=7, fancybox=True, shadow=True)
         ax.set_aspect('equal', 'box')
 
-
         # Save and show the plot.
         plt.tight_layout()
         plt.savefig("multilateration.png")
+        plt.close()
         # Uncomment to show the plot.
         #plt.show()
 
